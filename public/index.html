@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>File Bridge</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="brand-mark">FB</div>
+      <h1>File Bridge</h1>
+      <p>Securely manage remote files, screens, streams, and commands from one calm workspace.</p>
+      <label class="field-label" for="loginPassword">Server password</label>
+      <div class="login-row">
+        <input type="password" id="loginPassword" placeholder="Enter password" autocomplete="current-password" autofocus>
+        <button id="loginButton" type="button">Connect</button>
+      </div>
+      <div class="login-error" id="loginError"></div>
+      <div class="login-hint">Default local address: <span id="loginHost"></span></div>
+    </div>
+  </section>
+
+  <main id="app" class="app-shell" aria-label="File Bridge dashboard">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div class="brand-lockup">
+          <div class="brand-mark small">FB</div>
+          <div>
+            <strong>File Bridge</strong>
+            <span id="connectionStatus">Connecting...</span>
+          </div>
+        </div>
+        <button class="icon-button" id="refreshClientsButton" type="button" title="Refresh devices">Refresh</button>
+      </div>
+
+      <div class="sidebar-search">
+        <input id="pcSearch" type="search" placeholder="Search devices">
+      </div>
+
+      <div class="summary-grid">
+        <div>
+          <span id="onlineCount">0</span>
+          <small>Online</small>
+        </div>
+        <div>
+          <span id="totalCount">0</span>
+          <small>Total</small>
+        </div>
+      </div>
+
+      <div class="section-title">Devices</div>
+      <div id="pcList" class="pc-list"></div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Remote control center</div>
+          <h2 id="workspaceTitle">Select a device</h2>
+        </div>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="quickPingButton" type="button">Ping</button>
+          <button class="ghost-button" id="quickScreenshotButton" type="button">Screenshot</button>
+          <button class="danger-button" id="logoutButton" type="button">Logout</button>
+        </div>
+      </header>
+
+      <div class="overview-bar" id="overviewBar">
+        <div class="metric">
+          <span class="metric-label">Selected</span>
+          <strong id="selectedMetric">None</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Path</span>
+          <strong id="pathMetric">-</strong>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Activity</span>
+          <strong id="activityMetric">Ready</strong>
+        </div>
+      </div>
+
+      <div id="emptyState" class="empty-state">
+        <div class="empty-card">
+          <div class="empty-icon">PC</div>
+          <h2>No device selected</h2>
+          <p>Choose a connected device to browse files, capture screens, start a live preview, or run commands.</p>
+        </div>
+      </div>
+
+      <div id="pcContent" class="pc-content">
+        <nav class="tabs" aria-label="Device tools">
+          <button class="tab active" data-tab="files" type="button">Files</button>
+          <button class="tab" data-tab="screenshot" type="button">Screenshot</button>
+          <button class="tab" data-tab="live" type="button">Live</button>
+          <button class="tab" data-tab="terminal" type="button">Terminal</button>
+          <button class="tab" data-tab="info" type="button">System</button>
+        </nav>
+
+        <section class="tab-content active" id="tab-files">
+          <div class="tool-row">
+            <div class="path-bar" id="pathBar"></div>
+            <button class="tool-button" id="drivesButton" type="button">Drives</button>
+            <button class="tool-button" id="upButton" type="button">Up</button>
+            <button class="tool-button" id="refreshFilesButton" type="button">Refresh</button>
+          </div>
+          <div class="tool-row secondary">
+            <input id="fileSearch" class="grow" type="search" placeholder="Filter files in this folder">
+            <select id="fileSort">
+              <option value="name">Sort by name</option>
+              <option value="type">Sort by type</option>
+              <option value="size">Sort by size</option>
+              <option value="modified">Sort by modified</option>
+            </select>
+            <button class="tool-button" id="fileViewButton" type="button">Desktop view</button>
+            <button class="tool-button" id="newFolderButton" type="button">New folder</button>
+            <button class="primary-button" id="uploadButton" type="button">Upload</button>
+            <input type="file" id="uploadInput" multiple hidden>
+          </div>
+          <div class="files-meta" id="filesMeta">Select a device to browse files.</div>
+          <div class="transfer-status" id="transferStatus" hidden></div>
+          <div class="files-list" id="filesList"></div>
+        </section>
+
+        <section class="tab-content" id="tab-screenshot">
+          <div class="screenshot-container" id="screenshotContainer"></div>
+        </section>
+
+        <section class="tab-content" id="tab-live">
+          <div class="live-toolbar">
+            <label>Quality <input id="streamQuality" type="range" min="10" max="100" value="70"></label>
+            <label>FPS <input id="streamFps" type="number" min="5" max="30" value="15"></label>
+            <label>Scale <input id="streamResolution" type="number" min="0.3" max="1" step="0.1" value="0.7"></label>
+            <label>Monitor <select id="streamMonitor"><option value="0">Monitor 1</option></select></label>
+            <button class="tool-button" id="controlLockButton" type="button">Unlock control</button>
+            <button class="tool-button" id="pauseStreamButton" type="button">Pause</button>
+            <button class="tool-button" id="reconnectStreamButton" type="button">Reconnect</button>
+            <button class="tool-button" id="fitStreamButton" type="button">Fit</button>
+            <button class="tool-button" id="fullStreamButton" type="button">Fullscreen</button>
+            <button class="primary-button" id="startStreamButton" type="button">Start stream</button>
+            <button class="tool-button" id="stopStreamButton" type="button">Stop</button>
+          </div>
+          <div class="session-toolbar">
+            <span id="latencyMetricLive">Latency --</span>
+            <span id="fpsMetricLive">FPS --</span>
+            <span id="bitrateMetricLive">Bitrate --</span>
+            <button class="tool-button" id="copyRemoteClipboardButton" type="button">Get clipboard</button>
+            <button class="tool-button" id="pasteRemoteClipboardButton" type="button">Set clipboard</button>
+            <input id="launchProgramInput" placeholder="Open app: notepad, calc, chrome">
+            <button class="primary-button" id="launchProgramButton" type="button">Open</button>
+          </div>
+          <div class="live-status" id="liveStatus">Live stream inactive.</div>
+          <div class="live-preview" id="livePreview"></div>
+          <button class="mobile-keyboard-button" id="mobileKeyboardButton" type="button">Keyboard</button>
+        </section>
+
+        <section class="tab-content" id="tab-terminal">
+          <div class="terminal-toolbar">
+            <button class="tool-button preset-command" data-command="whoami" type="button">whoami</button>
+            <button class="tool-button preset-command" data-command="ipconfig" type="button">ipconfig</button>
+            <button class="tool-button preset-command" data-command="systeminfo" type="button">systeminfo</button>
+            <button class="tool-button" id="clearTerminalButton" type="button">Clear</button>
+          </div>
+          <div class="terminal-output" id="terminalOutput"></div>
+          <div class="terminal-input">
+            <span>&gt;</span>
+            <input id="terminalInput" placeholder="Enter command and press Enter">
+            <button class="primary-button" id="runCommandButton" type="button">Run</button>
+          </div>
+        </section>
+
+        <section class="tab-content" id="tab-info">
+          <div class="info-grid" id="infoGrid"></div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="activity-panel">
+      <div class="activity-head">
+        <strong>Activity</strong>
+        <button class="ghost-button" id="clearActivityButton" type="button">Clear</button>
+      </div>
+      <div id="activityLog" class="activity-log"></div>
+    </aside>
+  </main>
+
+  <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true">
+    <div class="modal" id="modalContent"></div>
+  </div>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
