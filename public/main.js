@@ -4,6 +4,7 @@ let selectedPC = null;
 let currentPath = '';
 let clients = {};
 let currentItems = [];
+let selectedFiles = new Set();
 let pendingDownloads = {};
 let pendingUploads = {};
 let liveStreamId = null;
@@ -334,6 +335,7 @@ function selectPC(id) {
     selectedPC = id;
     currentPath = '/';
     currentItems = [];
+    selectedFiles.clear();
     $('emptyState').style.display = 'none';
     $('pcContent').style.display = 'flex';
     renderPCList();
@@ -367,6 +369,8 @@ function switchTab(tab) {
 function loadFiles(pathValue) {
     if (!selectedPC) return;
     currentPath = pathValue || '/';
+    selectedFiles.clear();
+    updateBulkActions();
     updateSelectedHeader();
     $('filesList').innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading files...</div></div>';
     $('filesMeta').textContent = 'Loading ' + currentPath;
@@ -427,13 +431,21 @@ function renderFileItems(items, driveMode = false) {
         return;
     }
 
-    list.innerHTML = '<div class="file-header"><span>Name</span><span>Size</span><span>Modified</span><span>Actions</span></div>' +
-        items.map(item => fileRowHtml(item, driveMode)).join('');
+    list.innerHTML = items.map(item => fileRowHtml(item, driveMode)).join('');
 
     list.querySelectorAll('.file-item').forEach(row => {
-        row.addEventListener('dblclick', () => openFileRow(row));
+        const checkbox = row.querySelector('.file-item-checkbox');
         row.addEventListener('click', event => {
-            if (!event.target.closest('.file-actions')) openFileRow(row);
+            event.stopPropagation();
+            if (event.target === checkbox || event.target.closest('.file-item-checkbox')) {
+                toggleFileSelect(row.dataset.path);
+                updateBulkActions();
+            } else if (!event.target.closest('.file-actions')) {
+                openFileRow(row);
+            }
+        });
+        row.addEventListener('dblclick', () => {
+            if (!event.target.closest('.file-item-checkbox')) openFileRow(row);
         });
     });
 
@@ -445,6 +457,26 @@ function renderFileItems(items, driveMode = false) {
     });
 
     wireDropTarget(list);
+}
+
+function toggleFileSelect(path) {
+    if (selectedFiles.has(path)) {
+        selectedFiles.delete(path);
+        document.querySelector('[data-path="' + escAttr(path) + '"]')?.classList.remove('selected');
+    } else {
+        selectedFiles.add(path);
+        document.querySelector('[data-path="' + escAttr(path) + '"]')?.classList.add('selected');
+    }
+}
+
+function updateBulkActions() {
+    const bulkDelete = $('bulkDeleteButton');
+    if (selectedFiles.size > 0) {
+        bulkDelete.style.display = 'block';
+        bulkDelete.textContent = 'Delete (' + selectedFiles.size + ')';
+    } else {
+        bulkDelete.style.display = 'none';
+    }
 }
 
 function getFileEmoji(item) {
@@ -467,10 +499,10 @@ function fileRowHtml(item, driveMode) {
     const name = item.name || item.path || 'Untitled';
     const extension = getExtension(name);
     const kind = item.is_dir ? 'Folder' : extension.toUpperCase() || 'File';
-    return '<div class="file-item" data-path="' + escAttr(item.path || name) + '" data-name="' + escAttr(name) + '" data-ext="' + escAttr(extension) + '" data-dir="' + (item.is_dir ? '1' : '0') + '">' +
+    const isSelected = selectedFiles.has(item.path);
+    return '<div class="file-item' + (isSelected ? ' selected' : '') + '" data-path="' + escAttr(item.path || name) + '" data-name="' + escAttr(name) + '" data-ext="' + escAttr(extension) + '" data-dir="' + (item.is_dir ? '1' : '0') + '">' +
+        '<div class="file-item-checkbox"></div>' +
         '<div class="file-main"><span class="file-icon">' + escHtml(getFileEmoji(item)) + '</span><span class="file-text"><span class="file-name">' + escHtml(name) + '</span><span class="file-sub">' + escHtml(kind) + '</span></span></div>' +
-        '<div class="file-cell">' + escHtml(item.is_dir ? '-' : (item.size || '-')) + '</div>' +
-        '<div class="file-cell">' + escHtml(item.modified || '-') + '</div>' +
         '<div class="file-actions">' +
             '<button class="mini-button" data-action="' + (item.is_dir || driveMode ? 'open' : 'open-file') + '">' + (item.is_dir || driveMode ? 'Open' : 'Preview') + '</button>' +
             (item.is_dir || driveMode ? '' : '<button class="mini-button" data-action="download">Download</button>') +
@@ -1380,8 +1412,31 @@ function wireUi() {
     $('uploadInput').addEventListener('change', event => handleUpload(event.target.files));
     $('fileSearch').addEventListener('input', () => renderFileItems(getVisibleItems()));
     $('fileSort').addEventListener('change', () => renderFileItems(getVisibleItems()));
-    $('fileViewButton').textContent = fileViewMode === 'desktop' ? 'List view' : 'Desktop view';
-    $('fileViewButton').addEventListener('click', toggleFileView);
+    $('selectAllButton').addEventListener('click', () => {
+        selectedFiles.clear();
+        document.querySelectorAll('.file-item').forEach(item => {
+            selectedFiles.add(item.dataset.path);
+            item.classList.add('selected');
+        });
+        updateBulkActions();
+    });
+    $('deselectAllButton').addEventListener('click', () => {
+        selectedFiles.clear();
+        document.querySelectorAll('.file-item').forEach(item => item.classList.remove('selected'));
+        updateBulkActions();
+    });
+    $('bulkDeleteButton').addEventListener('click', () => {
+        if (selectedFiles.size === 0) {
+            toast('No files selected', 'error');
+            return;
+        }
+        if (confirm('Delete ' + selectedFiles.size + ' file(s)? This cannot be undone.')) {
+            selectedFiles.forEach(path => deleteFile(path));
+            selectedFiles.clear();
+            updateBulkActions();
+            setTimeout(refreshFiles, 500);
+        }
+    });
     $('startStreamButton').addEventListener('click', startLiveStream);
     $('stopStreamButton').addEventListener('click', stopLiveStream);
     document.body.addEventListener('dragover', event => event.preventDefault());
