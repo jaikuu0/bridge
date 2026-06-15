@@ -64,4 +64,17 @@ module.exports = {
         title: '🌉 File Bridge',
         subtitle: 'Your personal remote control center',
     },
+
+    // ─── STREAMING DEFAULTS (low bandwidth) ───────────────────
+    streaming: {
+        defaultQuality: 35,            // Eco mode default (10-100)
+        defaultFps: 8,                 // Low FPS for bandwidth savings
+        defaultResolution: 0.5,        // 50% scale
+        audioEnabled: false,           // Audio disabled by default
+    },
+
+    // ─── SCREENSHOT DEFAULTS (low bandwidth) ───────────────────
+    screenshot: {
+        defaultQuality: 30,            // Eco quality for screenshots
+    },
 };

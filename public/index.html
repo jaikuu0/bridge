@@ -106,11 +106,27 @@
 
         <section class="tab-content active" id="tab-files">
           <div class="tool-row">
-            <div class="path-bar" id="pathBar"></div>
+            <div class="path-input-wrapper">
+              <input id="manualPathInput" type="text" placeholder="Enter path (e.g. C:\Users or /home/user)" class="path-input">
+              <button class="path-go-button" id="goToPathButton" type="button" title="Go to path">Go</button>
+            </div>
             <button class="tool-button" id="drivesButton" type="button">Drives</button>
             <button class="tool-button" id="upButton" type="button">Up</button>
             <button class="tool-button" id="refreshFilesButton" type="button">Refresh</button>
           </div>
+
+          <div class="quick-access-bar">
+            <span class="quick-access-label">Quick:</span>
+            <button class="quick-path" data-path="desktop" type="button">Desktop</button>
+            <button class="quick-path" data-path="downloads" type="button">Downloads</button>
+            <button class="quick-path" data-path="documents" type="button">Documents</button>
+            <button class="quick-path" data-path="pictures" type="button">Pictures</button>
+            <button class="quick-path" data-path="home" type="button">Home</button>
+            <button class="quick-path" data-path="recent" type="button">Recent</button>
+          </div>
+
+          <div class="path-breadcrumb" id="pathBar"></div>
+
           <div class="tool-row secondary">
             <input id="fileSearch" class="grow" type="search" placeholder="Filter files in this folder">
             <select id="fileSort">
@@ -132,33 +148,55 @@
         </section>
 
         <section class="tab-content" id="tab-screenshot">
+          <div class="screenshot-toolbar">
+            <div class="screenshot-quality">
+              <span>Quality:</span>
+              <button class="quality-preset active" data-quality="30" type="button">Eco</button>
+              <button class="quality-preset" data-quality="60" type="button">Balanced</button>
+              <button class="quality-preset" data-quality="90" type="button">HD</button>
+            </div>
+            <button class="primary-button" id="captureScreenshotButton" type="button">Capture</button>
+          </div>
           <div class="screenshot-container" id="screenshotContainer"></div>
         </section>
 
         <section class="tab-content" id="tab-live">
-          <div class="live-toolbar">
-            <label>Quality <input id="streamQuality" type="range" min="10" max="100" value="70"></label>
-            <label>FPS <input id="streamFps" type="number" min="5" max="30" value="15"></label>
-            <label>Scale <input id="streamResolution" type="number" min="0.3" max="1" step="0.1" value="0.7"></label>
-            <label>Monitor <select id="streamMonitor"><option value="0">Monitor 1</option></select></label>
-            <button class="tool-button" id="controlLockButton" type="button">Unlock control</button>
-            <button class="tool-button" id="pauseStreamButton" type="button">Pause</button>
-            <button class="tool-button" id="reconnectStreamButton" type="button">Reconnect</button>
-            <button class="tool-button" id="fitStreamButton" type="button">Fit</button>
-            <button class="tool-button" id="fullStreamButton" type="button">Fullscreen</button>
-            <button class="primary-button" id="startStreamButton" type="button">Start stream</button>
-            <button class="tool-button" id="stopStreamButton" type="button">Stop</button>
+          <div class="live-controls">
+            <div class="live-main-row">
+              <div class="quality-preset-group">
+                <button class="quality-preset live-preset active" data-preset="eco" type="button">Eco</button>
+                <button class="quality-preset live-preset" data-preset="balanced" type="button">Balanced</button>
+                <button class="quality-preset live-preset" data-preset="hd" type="button">HD</button>
+              </div>
+              <div class="live-actions">
+                <button class="tool-button" id="pauseStreamButton" type="button" disabled>Pause</button>
+                <button class="tool-button" id="fitStreamButton" type="button" disabled>Fit</button>
+                <button class="tool-button" id="fullStreamButton" type="button" disabled>Fullscreen</button>
+                <button class="tool-button" id="controlLockButton" type="button" disabled>Unlock</button>
+              </div>
+              <div class="live-main-buttons">
+                <button class="primary-button" id="startStreamButton" type="button">Start Stream</button>
+                <button class="danger-button" id="stopStreamButton" type="button" style="display:none;">Stop</button>
+              </div>
+            </div>
+            <div class="live-stats-row" id="liveStatsRow">
+              <span class="stat-item" id="liveResolutionStat">--</span>
+              <span class="stat-item" id="liveFpsStat">-- fps</span>
+              <span class="stat-item" id="liveBitrateStat">-- kbps</span>
+              <label class="audio-toggle">
+                <input type="checkbox" id="audioEnabledCheckbox">
+                <span>Audio</span>
+              </label>
+            </div>
+            <button class="advanced-toggle" id="advancedSettingsToggle" type="button">Advanced Settings</button>
+            <div class="live-advanced" id="liveAdvancedSettings" hidden>
+              <label>Quality <input id="streamQuality" type="range" min="10" max="100" value="35"></label>
+              <label>FPS <input id="streamFps" type="number" min="5" max="30" value="8"></label>
+              <label>Scale <input id="streamResolution" type="number" min="0.3" max="1" step="0.1" value="0.5"></label>
+              <label>Monitor <select id="streamMonitor"><option value="0">Monitor 1</option></select></label>
+            </div>
           </div>
-          <div class="session-toolbar">
-            <span id="latencyMetricLive">Latency --</span>
-            <span id="fpsMetricLive">FPS --</span>
-            <span id="bitrateMetricLive">Bitrate --</span>
-            <button class="tool-button" id="copyRemoteClipboardButton" type="button">Get clipboard</button>
-            <button class="tool-button" id="pasteRemoteClipboardButton" type="button">Set clipboard</button>
-            <input id="launchProgramInput" placeholder="Open app: notepad, calc, chrome">
-            <button class="primary-button" id="launchProgramButton" type="button">Open</button>
-          </div>
-          <div class="live-status" id="liveStatus">Live stream inactive.</div>
+          <div class="live-status" id="liveStatus">Click "Start Stream" to begin.</div>
           <div class="live-preview" id="livePreview"></div>
           <button class="mobile-keyboard-button" id="mobileKeyboardButton" type="button">Keyboard</button>
         </section>

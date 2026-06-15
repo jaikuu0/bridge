@@ -22,9 +22,37 @@ let liveStats = { frames: 0, bytes: 0, fps: 0, bitrate: 0, lastStatsAt: 0, lastA
 let livePingTimer = null;
 let commandSentAt = {};
 let audioContext = null;
-let fileViewMode = localStorage.getItem('fb_file_view') || 'desktop';
 let terminalHistory = [];
 let terminalHistoryIndex = 0;
+let recentPaths = JSON.parse(localStorage.getItem('fb_recent_paths') || '[]').slice(0, 10);
+let screenshotQuality = 30;
+let audioEnabled = false;
+let isStreaming = false;
+
+const STREAM_PRESETS = {
+    eco: { quality: 25, fps: 6, resolution: 0.45 },
+    balanced: { quality: 45, fps: 10, resolution: 0.6 },
+    hd: { quality: 75, fps: 18, resolution: 0.85 }
+};
+
+const QUICK_PATHS = {
+    windows: {
+        desktop: ['%USERPROFILE%\\Desktop', 'C:\\Users\\Public\\Desktop'],
+        downloads: ['%USERPROFILE%\\Downloads', 'C:\\Users\\Public\\Downloads'],
+        documents: ['%USERPROFILE%\\Documents', 'C:\\Users\\Public\\Documents'],
+        pictures: ['%USERPROFILE%\\Pictures', 'C:\\Users\\Public\\Pictures'],
+        home: ['%USERPROFILE%', 'C:\\Users'],
+        recent: null
+    },
+    default: {
+        desktop: ['~/Desktop', '/home/*/Desktop'],
+        downloads: ['~/Downloads', '/home/*/Downloads'],
+        documents: ['~/Documents', '/home/*/Documents'],
+        pictures: ['~/Pictures', '/home/*/Pictures'],
+        home: ['~', '/home'],
+        recent: null
+    }
+};
 
 const textExts = ['txt', 'md', 'log', 'json', 'js', 'ts', 'css', 'html', 'py', 'bat', 'cmd', 'ini', 'conf', 'xml', 'csv', 'yml', 'yaml'];
 const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp'];
@@ -38,7 +66,7 @@ function toast(message, type = 'info') {
     element.className = 'toast ' + type;
     element.textContent = message;
     $('toastContainer').appendChild(element);
-    setTimeout(() => element.remove(), 4200);
+    setTimeout(() => element.remove(), 3500);
     addActivity(message, type);
 }
 
@@ -86,6 +114,10 @@ function doLogout() {
     if (ws) ws.close();
     ws = null;
     selectedPC = null;
+    if (liveStreamId) {
+        liveStreamId = null;
+        isStreaming = false;
+    }
     $('app').classList.remove('active');
     $('loginScreen').style.display = 'grid';
     renderPCList();
@@ -186,7 +218,7 @@ function handleCommandResult(message) {
         renderTerminalOutput(data);
     } else if (originalType === 'ping') {
         const latency = commandSentAt[message.requestId] ? Date.now() - commandSentAt[message.requestId] : null;
-        if (latency) $('latencyMetricLive').textContent = 'Latency ' + latency + 'ms';
+        if (latency) $('liveResolutionStat').textContent = latency + 'ms';
         toast('Latency: ' + (latency ? latency + 'ms' : (data.latency || 'ok')), 'success');
     } else if (originalType === 'delete_file') {
         data.success ? toast('Deleted successfully', 'success') : toast(data.error || 'Delete failed', 'error');
@@ -205,28 +237,26 @@ function handleCommandResult(message) {
     } else if (originalType === 'start_live_stream' || originalType === 'live_stream_response') {
         if (data.status === 'streaming') {
             liveStreamId = data.stream_id || liveStreamId;
+            isStreaming = true;
             $('liveStatus').textContent = 'Live stream active.';
+            updateStreamButtons(true);
             toast('Live stream started', 'success');
         } else if (data.error) {
             $('liveStatus').textContent = data.error;
             toast(data.error, 'error');
+            updateStreamButtons(false);
         }
     } else if (originalType === 'stop_live_stream') {
+        isStreaming = false;
         $('liveStatus').textContent = 'Live stream stopped.';
         toast('Live stream stopped', 'info');
         liveStreamId = null;
+        updateStreamButtons(false);
+        clearLivePreview();
     } else if (originalType === 'adjust_stream') {
         if (data.error) toast(data.error, 'error');
     } else if (originalType === 'get_monitors') {
         renderMonitorOptions(data.monitors || [], data.selected || 0);
-    } else if (originalType === 'get_clipboard') {
-        showClipboardModal(data.text || '');
-    } else if (originalType === 'set_clipboard') {
-        data.success ? toast('Remote clipboard updated', 'success') : toast(data.error || 'Clipboard update failed', 'error');
-    } else if (originalType === 'remote_input') {
-        if (data.error) toast(data.error, 'error');
-    } else if (originalType === 'launch_program') {
-        data.success ? toast('Program opened', 'success') : toast(data.error || 'Open failed', 'error');
     }
     delete commandSentAt[message.requestId];
 }
@@ -246,18 +276,24 @@ function handleCommandEvent(message) {
     }
 
     if (message.eventType === 'stream_frame') {
-        updateLivePreview(payload.frameData, payload.width, payload.height, payload.frameIndex, payload.monitor);
+        if (!livePaused && isStreaming) {
+            updateLivePreview(payload.frameData, payload.width, payload.height, payload.frameIndex, payload.monitor);
+        }
         return;
     }
 
     if (message.eventType === 'stream_audio') {
-        playAudioChunk(payload);
+        if (audioEnabled && !livePaused) {
+            playAudioChunk(payload);
+        }
         return;
     }
 
     if (message.eventType === 'stream_error') {
         $('liveStatus').textContent = payload.error || 'Stream error';
         toast('Stream error: ' + (payload.error || 'Unknown'), 'error');
+        isStreaming = false;
+        updateStreamButtons(false);
         return;
     }
 
@@ -332,6 +368,9 @@ function renderPCList() {
 }
 
 function selectPC(id) {
+    if (isStreaming) {
+        stopLiveStream();
+    }
     selectedPC = id;
     currentPath = '/';
     currentItems = [];
@@ -372,9 +411,73 @@ function loadFiles(pathValue) {
     selectedFiles.clear();
     updateBulkActions();
     updateSelectedHeader();
+    updateManualPathInput();
     $('filesList').innerHTML = '<div class="loading"><div class="spinner"></div><div>Loading files...</div></div>';
     $('filesMeta').textContent = 'Loading ' + currentPath;
     sendCommand('list_files', { path: currentPath });
+}
+
+function updateManualPathInput() {
+    const input = $('manualPathInput');
+    if (input) {
+        input.value = currentPath === '/' ? '' : currentPath;
+    }
+}
+
+function handleManualPathInput() {
+    const input = $('manualPathInput');
+    const pathValue = (input.value || '').trim();
+    if (pathValue) {
+        loadFiles(pathValue);
+        addToRecentPaths(pathValue);
+    }
+}
+
+function addToRecentPaths(pathValue) {
+    recentPaths = recentPaths.filter(p => p !== pathValue);
+    recentPaths.unshift(pathValue);
+    recentPaths = recentPaths.slice(0, 10);
+    localStorage.setItem('fb_recent_paths', JSON.stringify(recentPaths));
+}
+
+function handleQuickPath(pathType) {
+    if (pathType === 'recent') {
+        if (recentPaths.length > 0) {
+            showRecentPathsModal();
+        } else {
+            toast('No recent paths', 'info');
+        }
+        return;
+    }
+
+    const client = clients[selectedPC];
+    const platform = client?.systemInfo?.platform?.toLowerCase() || '';
+    const isWindows = platform.includes('win');
+    const paths = isWindows ? QUICK_PATHS.windows : QUICK_PATHS.default;
+    const pathList = paths[pathType];
+
+    if (pathList && pathList.length > 0) {
+        loadFiles(pathList[0]);
+    }
+}
+
+function showRecentPathsModal() {
+    if (recentPaths.length === 0) {
+        toast('No recent paths', 'info');
+        return;
+    }
+    showModal('Recent Paths',
+        '<div class="recent-paths-list">' +
+        recentPaths.map(p => '<button class="tool-button recent-path-item" data-path="' + escAttr(p) + '" type="button">' + escHtml(p) + '</button>').join('') +
+        '</div>',
+        [{ label: 'Close', action: closeModal }]
+    );
+    document.querySelectorAll('.recent-path-item').forEach(btn => {
+        btn.addEventListener('click', () => {
+            loadFiles(btn.dataset.path);
+            closeModal();
+        });
+    });
 }
 
 function renderDrives(data) {
@@ -401,6 +504,7 @@ function renderFiles(data) {
     currentItems = data.items || [];
     renderPathBar(currentPath);
     updateSelectedHeader();
+    updateManualPathInput();
     clearTransferStatus();
     $('filesMeta').textContent = currentItems.length + ' item' + (currentItems.length === 1 ? '' : 's') + ' in ' + currentPath;
     renderFileItems(getVisibleItems());
@@ -423,7 +527,6 @@ function getVisibleItems() {
 function renderFileItems(items, driveMode = false) {
     const list = $('filesList');
     list.classList.remove('dragover');
-    list.classList.toggle('desktop-view', fileViewMode === 'desktop');
 
     if (!items.length) {
         list.innerHTML = '<div class="drop-target" id="dropTarget"><strong>This folder is empty.</strong><br>Drop files here or use Upload.</div>';
@@ -480,19 +583,19 @@ function updateBulkActions() {
 }
 
 function getFileEmoji(item) {
-    if (item.is_dir) return '📁';
+    if (item.is_dir) return 'D';
     const extension = getExtension(item.name || item.path || '').toLowerCase();
     const map = {
-        'txt': '📄', 'md': '📝', 'log': '📝', 'json': '🧾', 'csv': '📑',
-        'js': '📜', 'ts': '📜', 'py': '🐍', 'html': '🌐', 'css': '🎨',
-        'png': '🖼️', 'jpg': '🖼️', 'jpeg': '🖼️', 'gif': '🖼️', 'bmp': '🖼️', 'svg': '🖼️',
-        'mp3': '🎵', 'wav': '🎧', 'flac': '🎧',
-        'mp4': '🎬', 'mov': '🎬', 'mkv': '🎬',
-        'zip': '🗜️', 'rar': '🗜️', '7z': '🗜️', 'gz': '🗜️',
-        'exe': '⚙️', 'msi': '⚙️', 'bat': '⚙️', 'cmd': '⚙️',
-        'pdf': '📕', 'doc': '📘', 'docx': '📘', 'ppt': '📊', 'pptx': '📊', 'xls': '📈', 'xlsx': '📈',
+        'txt': 'T', 'md': 'M', 'log': 'L', 'json': '{', 'csv': '#',
+        'js': 'JS', 'ts': 'TS', 'py': 'PY', 'html': 'H', 'css': 'C',
+        'png': 'IMG', 'jpg': 'IMG', 'jpeg': 'IMG', 'gif': 'IMG', 'bmp': 'IMG', 'svg': 'IMG', 'webp': 'IMG',
+        'mp3': 'MP3', 'wav': 'WAV', 'flac': 'FLC',
+        'mp4': 'MP4', 'mov': 'MOV', 'mkv': 'MKV',
+        'zip': 'ZIP', 'rar': 'RAR', '7z': '7Z', 'gz': 'GZ',
+        'exe': 'EXE', 'msi': 'MSI', 'bat': 'BAT', 'cmd': 'CMD',
+        'pdf': 'PDF', 'doc': 'DOC', 'docx': 'DOC', 'ppt': 'PPT', 'pptx': 'PPT', 'xls': 'XLS', 'xlsx': 'XLS',
     };
-    return map[extension] || '📄';
+    return map[extension] || 'F';
 }
 
 function fileRowHtml(item, driveMode) {
@@ -514,7 +617,9 @@ function fileRowHtml(item, driveMode) {
 
 function openFileRow(row) {
     if (row.dataset.dir === '1') {
-        loadFiles(row.dataset.path);
+        const pathValue = row.dataset.path;
+        loadFiles(pathValue);
+        addToRecentPaths(pathValue);
     } else {
         openFile(row.dataset.path, row.dataset.name, row.dataset.ext);
     }
@@ -526,7 +631,10 @@ function runFileAction(action, row) {
     const name = row.dataset.name;
     const extension = row.dataset.ext;
 
-    if (action === 'open') loadFiles(pathValue);
+    if (action === 'open') {
+        loadFiles(pathValue);
+        addToRecentPaths(pathValue);
+    }
     if (action === 'open-file') openFile(pathValue, name, extension);
     if (action === 'download') downloadFile(pathValue, name);
     if (action === 'rename') showRenameModal(pathValue, name);
@@ -692,7 +800,7 @@ function saveBlob(blobOrBytes, name) {
 
 function showTextEditor(pathValue, name, content) {
     showModal('Edit ' + name,
-        '<textarea id="previewTextArea">' + escHtml(content) + '</textarea>',
+        '<textarea id="previewTextArea" style="height:300px;">' + escHtml(content) + '</textarea>',
         [
             { label: 'Cancel', action: closeModal },
             { label: 'Save', primary: true, action: () => saveTextFile(pathValue, name, $('previewTextArea').value) }
@@ -802,13 +910,12 @@ function showNewFolderModal() {
 
 function takeScreenshot() {
     $('screenshotContainer').innerHTML = '<div class="loading"><div class="spinner"></div><div>Capturing screen...</div></div>';
-    sendCommand('take_screenshot');
+    sendCommand('take_screenshot', { quality: screenshotQuality });
 }
 
 function renderScreenshotEmpty() {
     if ($('screenshotContainer').innerHTML.trim()) return;
-    $('screenshotContainer').innerHTML = '<div class="empty-card"><div class="empty-icon">IMG</div><h2>Capture the remote screen</h2><p>Take a fresh screenshot from the selected device.</p><div class="screenshot-actions"><button class="primary-button" type="button" id="captureNowButton">Capture screen</button></div></div>';
-    $('captureNowButton').addEventListener('click', takeScreenshot);
+    $('screenshotContainer').innerHTML = '<div class="empty-card"><div class="empty-icon">IMG</div><h2>Capture the remote screen</h2><p>Take a fresh screenshot from the selected device. Quality presets control file size.</p></div>';
 }
 
 function renderScreenshot(data) {
@@ -834,33 +941,98 @@ function downloadScreenshot() {
     link.click();
 }
 
+function setStreamQualityPreset(preset) {
+    const settings = STREAM_PRESETS[preset];
+    if (!settings) return;
+
+    $('streamQuality').value = settings.quality;
+    $('streamFps').value = settings.fps;
+    $('streamResolution').value = settings.resolution;
+
+    document.querySelectorAll('.quality-preset.live-preset').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.preset === preset);
+    });
+
+    if (isStreaming && liveStreamId) {
+        sendCommand('adjust_stream', {
+            streamId: liveStreamId,
+            quality: settings.quality,
+            fps: settings.fps,
+            resolution: settings.resolution
+        });
+    }
+
+    toast(preset.charAt(0).toUpperCase() + preset.slice(1) + ' mode', 'info');
+}
+
 function startLiveStream() {
+    if (isStreaming) {
+        toast('Stream already running', 'error');
+        return;
+    }
+
     liveStreamId = 'live_' + Date.now();
     livePaused = false;
+    isStreaming = true;
     resetLiveStats();
     ensureLiveStage();
+
+    const quality = Number($('streamQuality').value) || 35;
+    const fps = Number($('streamFps').value) || 8;
+    const resolution = Number($('streamResolution').value) || 0.5;
+    const monitor = Number($('streamMonitor').value) || 0;
+
     sendCommand('start_live_stream', {
         streamId: liveStreamId,
-        quality: Number($('streamQuality').value) || 70,
-        fps: Number($('streamFps').value) || 15,
-        resolution: Number($('streamResolution').value) || 0.7,
-        monitor: Number($('streamMonitor').value) || 0
+        quality,
+        fps,
+        resolution,
+        monitor,
+        audio: audioEnabled
     });
+
     $('liveStatus').textContent = 'Starting live stream...';
+    updateStreamButtons(true);
     startLivePing();
 }
 
 function stopLiveStream() {
-    if (!liveStreamId) {
+    if (!liveStreamId && !isStreaming) {
         toast('No active stream', 'error');
         return;
     }
-    sendCommand('stop_live_stream', { streamId: liveStreamId });
+
+    if (liveStreamId) {
+        sendCommand('stop_live_stream', { streamId: liveStreamId });
+    }
+
+    liveStreamId = null;
+    isStreaming = false;
+    livePaused = false;
     stopLivePing();
+    clearLivePreview();
+    updateStreamButtons(false);
+    $('liveStatus').textContent = 'Click "Start Stream" to begin.';
+}
+
+function updateStreamButtons(streaming) {
+    $('startStreamButton').style.display = streaming ? 'none' : 'inline-flex';
+    $('stopStreamButton').style.display = streaming ? 'inline-flex' : 'none';
+    $('pauseStreamButton').disabled = !streaming;
+    $('fitStreamButton').disabled = !streaming;
+    $('fullStreamButton').disabled = !streaming;
+    $('controlLockButton').disabled = !streaming;
+}
+
+function clearLivePreview() {
+    const preview = $('livePreview');
+    if (preview) {
+        preview.innerHTML = '';
+    }
 }
 
 function renderLiveEmpty() {
-    $('livePreview').innerHTML = '<div class="empty-card"><div class="empty-icon">LIVE</div><h2>Live preview</h2><p>Start a stream to watch the remote screen in a smoother desktop-like viewer.</p></div>';
+    $('livePreview').innerHTML = '<div class="empty-card"><div class="empty-icon">LIVE</div><h2>Live preview</h2><p>Start a stream to watch the remote screen. Use Eco mode for minimal bandwidth.</p></div>';
 }
 
 function ensureLiveStage() {
@@ -879,7 +1051,7 @@ function ensureLiveStage() {
 }
 
 function updateLivePreview(imageData, width, height, frameIndex, monitor) {
-    if (livePaused) return;
+    if (livePaused || !isStreaming) return;
     ensureLiveStage();
     const now = performance.now();
     const instantFps = lastFrameAt ? Math.round(1000 / Math.max(1, now - lastFrameAt)) : 0;
@@ -901,9 +1073,10 @@ function updateLivePreview(imageData, width, height, frameIndex, monitor) {
         monitor: monitor || liveFrameMeta.monitor,
     };
     updateLiveStats(imageData.length, instantFps);
+
+    $('liveResolutionStat').textContent = (width || '?') + 'x' + (height || '?');
     $('liveHud').innerHTML =
-        '<span>' + (liveControlUnlocked ? 'CONTROL' : 'VIEW') + '</span><span>' + escHtml(width || '?') + 'x' + escHtml(height || '?') + '</span><span>Frame ' + escHtml(frameIndex ?? '-') + '</span><span>' + liveStats.fps + ' fps</span>';
-    $('liveStatus').textContent = 'Live stream active - ' + (width || '?') + 'x' + (height || '?') + ' - frame ' + frameIndex;
+        '<span>' + (liveControlUnlocked ? 'CONTROL' : 'VIEW') + '</span><span>' + escHtml(width || '?') + 'x' + escHtml(height || '?') + '</span><span>' + liveStats.fps + ' fps</span>';
 }
 
 function toggleLiveFit() {
@@ -922,7 +1095,7 @@ function openLiveFullscreen() {
 }
 
 function adjustLiveStream(field, value) {
-    if (!liveStreamId) return;
+    if (!liveStreamId || !isStreaming) return;
     sendCommand('adjust_stream', { streamId: liveStreamId, [field]: value });
 }
 
@@ -930,7 +1103,7 @@ function wireLiveCanvas() {
     const canvas = $('liveCanvas');
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', event => {
-        if (!liveControlUnlocked) return;
+        if (!liveControlUnlocked || livePaused || !isStreaming) return;
         event.preventDefault();
         canvas.focus();
         livePointerButton = pointerButtonName(event);
@@ -948,7 +1121,7 @@ function wireLiveCanvas() {
         }
     });
     canvas.addEventListener('pointermove', throttle(event => {
-        if (!liveControlUnlocked || !liveDragging) return;
+        if (!liveControlUnlocked || !liveDragging || livePaused || !isStreaming) return;
         const point = mapCanvasPoint(event);
         if (!point) return;
         const distance = liveStartPoint ? Math.hypot(point.x - liveStartPoint.x, point.y - liveStartPoint.y) : 0;
@@ -959,11 +1132,11 @@ function wireLiveCanvas() {
         if (liveMouseDownSent) sendRemoteInput('mouse_move', point);
     }, 30));
     canvas.addEventListener('pointerup', event => {
-        if (!liveControlUnlocked) return;
+        if (!liveControlUnlocked || !isStreaming) return;
         clearTimeout(liveLongPressTimer);
         const point = mapCanvasPoint(event);
         if (point && liveDragging && liveMouseDownSent) sendRemoteInput('mouse_up', { ...point, button: livePointerButton });
-        if (point && liveDragging && !liveMouseDownSent) sendRemoteInput('click', { ...point, button: livePointerButton });
+        if (point && liveDragging && !liveMouseDownSent && !livePaused) sendRemoteInput('click', { ...point, button: livePointerButton });
         liveDragging = false;
         liveMouseDownSent = false;
     });
@@ -971,18 +1144,18 @@ function wireLiveCanvas() {
         if (liveControlUnlocked) event.preventDefault();
     });
     canvas.addEventListener('dblclick', event => {
-        if (!liveControlUnlocked) return;
+        if (!liveControlUnlocked || livePaused || !isStreaming) return;
         const point = mapCanvasPoint(event);
         if (point) sendRemoteInput('double_click', { ...point, button: 'left' });
     });
     canvas.addEventListener('contextmenu', event => {
-        if (!liveControlUnlocked) return;
+        if (!liveControlUnlocked || livePaused || !isStreaming) return;
         event.preventDefault();
         const point = mapCanvasPoint(event);
         if (point) sendRemoteInput('click', { ...point, button: 'right' });
     });
     canvas.addEventListener('wheel', event => {
-        if (!liveControlUnlocked) return;
+        if (!liveControlUnlocked || livePaused || !isStreaming) return;
         event.preventDefault();
         sendRemoteInput('scroll', { delta: Math.sign(event.deltaY) * -20 });
     }, { passive: false });
@@ -1010,12 +1183,12 @@ function pointerButtonName(event) {
 }
 
 function sendRemoteInput(action, params = {}) {
-    if (!liveControlUnlocked) return;
+    if (!liveControlUnlocked || !isStreaming) return;
     sendCommand('remote_input', { action, ...params });
 }
 
 function handleLiveKey(event) {
-    if (!liveControlUnlocked || !document.getElementById('tab-live').classList.contains('active')) return;
+    if (!liveControlUnlocked || !document.getElementById('tab-live').classList.contains('active') || !isStreaming) return;
     if (event.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) return;
     if (event.key === 'Escape') {
         setControlLock(false);
@@ -1044,7 +1217,7 @@ function handleLiveKey(event) {
 
 function setControlLock(enabled) {
     liveControlUnlocked = enabled;
-    $('controlLockButton').textContent = enabled ? 'Lock input' : 'Unlock control';
+    $('controlLockButton').textContent = enabled ? 'Lock input' : 'Unlock';
     $('controlLockButton').classList.toggle('control-active', enabled);
     $('livePreview').classList.toggle('control-active', enabled);
     toast(enabled ? 'Remote control unlocked' : 'Remote control locked', enabled ? 'success' : 'info');
@@ -1057,19 +1230,38 @@ function toggleControlLock() {
 function toggleStreamPause() {
     livePaused = !livePaused;
     $('pauseStreamButton').textContent = livePaused ? 'Resume' : 'Pause';
-    $('liveStatus').textContent = livePaused ? 'Live stream paused locally.' : 'Live stream active.';
+
+    if (livePaused) {
+        $('liveStatus').textContent = 'Live stream PAUSED. Click Resume to continue.';
+        addPausedOverlay();
+    } else {
+        $('liveStatus').textContent = 'Live stream active.';
+        removePausedOverlay();
+    }
+    toast(livePaused ? 'Stream paused' : 'Stream resumed', 'info');
 }
 
-function reconnectStream() {
-    if (liveStreamId) stopLiveStream();
-    setTimeout(startLiveStream, 350);
+function addPausedOverlay() {
+    const stage = $('liveStage');
+    if (stage && !$('pausedOverlay')) {
+        const overlay = document.createElement('div');
+        overlay.id = 'pausedOverlay';
+        overlay.className = 'paused-overlay';
+        overlay.innerHTML = '<div class="paused-badge">PAUSED</div>';
+        stage.appendChild(overlay);
+    }
+}
+
+function removePausedOverlay() {
+    const overlay = $('pausedOverlay');
+    if (overlay) overlay.remove();
 }
 
 function resetLiveStats() {
     liveStats = { frames: 0, bytes: 0, fps: 0, bitrate: 0, lastStatsAt: performance.now(), lastAdaptiveAt: 0 };
     lastFrameAt = 0;
-    $('fpsMetricLive').textContent = 'FPS --';
-    $('bitrateMetricLive').textContent = 'Bitrate --';
+    $('liveFpsStat').textContent = '-- fps';
+    $('liveBitrateStat').textContent = '-- kbps';
 }
 
 function updateLiveStats(base64Length, instantFps) {
@@ -1083,32 +1275,18 @@ function updateLiveStats(base64Length, instantFps) {
         liveStats.frames = 0;
         liveStats.bytes = 0;
         liveStats.lastStatsAt = now;
-        $('fpsMetricLive').textContent = 'FPS ' + liveStats.fps;
-        $('bitrateMetricLive').textContent = 'Bitrate ' + liveStats.bitrate + ' kbps';
-        adaptStreamQuality(now);
+        $('liveFpsStat').textContent = liveStats.fps + ' fps';
+        $('liveBitrateStat').textContent = liveStats.bitrate + ' kbps';
     } else if (instantFps) {
         liveStats.fps = instantFps;
     }
 }
 
-function adaptStreamQuality(now) {
-    if (!liveStreamId || now - liveStats.lastAdaptiveAt < 3500) return;
-    const targetFps = Number($('streamFps').value) || 15;
-    const quality = Number($('streamQuality').value) || 70;
-    if (liveStats.fps && liveStats.fps < targetFps * 0.55 && quality > 35) {
-        $('streamQuality').value = String(Math.max(30, quality - 10));
-        adjustLiveStream('quality', Number($('streamQuality').value));
-        liveStats.lastAdaptiveAt = now;
-    } else if (liveStats.fps > targetFps * 0.85 && quality < 85) {
-        $('streamQuality').value = String(Math.min(90, quality + 5));
-        adjustLiveStream('quality', Number($('streamQuality').value));
-        liveStats.lastAdaptiveAt = now;
-    }
-}
-
 function startLivePing() {
     stopLivePing();
-    livePingTimer = setInterval(() => sendCommand('ping'), 3000);
+    livePingTimer = setInterval(() => {
+        if (isStreaming && selectedPC) sendCommand('ping');
+    }, 5000);
 }
 
 function stopLivePing() {
@@ -1117,7 +1295,7 @@ function stopLivePing() {
 }
 
 function playAudioChunk(payload) {
-    if (!payload.audioData) return;
+    if (!payload.audioData || !audioEnabled) return;
     try {
         audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: payload.sampleRate || 44100 });
         const bytes = base64ToUint8Array(payload.audioData);
@@ -1141,41 +1319,6 @@ function renderMonitorOptions(monitors, selected = 0) {
         escHtml((monitor.name || 'Monitor ' + (index + 1)) + ' - ' + monitor.width + 'x' + monitor.height) +
         '</option>'
     ).join('');
-}
-
-function showClipboardModal(text) {
-    showModal('Remote clipboard',
-        '<textarea id="clipboardTextArea">' + escHtml(text) + '</textarea>',
-        [
-            { label: 'Close', action: closeModal },
-            { label: 'Set remote clipboard', primary: true, action: () => {
-                sendCommand('set_clipboard', { text: $('clipboardTextArea').value });
-                closeModal();
-            }}
-        ]
-    );
-}
-
-function setRemoteClipboardFromPrompt() {
-    navigator.clipboard?.readText()
-        .then(text => sendCommand('set_clipboard', { text }))
-        .catch(() => {
-            const text = prompt('Text to set on remote clipboard');
-            if (text !== null) sendCommand('set_clipboard', { text });
-        });
-}
-
-function launchProgram() {
-    const command = $('launchProgramInput').value.trim();
-    if (!command) return;
-    sendCommand('launch_program', { command });
-}
-
-function toggleFileView() {
-    fileViewMode = fileViewMode === 'desktop' ? 'list' : 'desktop';
-    localStorage.setItem('fb_file_view', fileViewMode);
-    $('fileViewButton').textContent = fileViewMode === 'desktop' ? 'List view' : 'Desktop view';
-    renderFileItems(getVisibleItems());
 }
 
 function showMobileKeyboard() {
@@ -1437,6 +1580,26 @@ function wireUi() {
             setTimeout(refreshFiles, 500);
         }
     });
+
+    $('manualPathInput').addEventListener('keydown', event => {
+        if (event.key === 'Enter') handleManualPathInput();
+    });
+    $('goToPathButton').addEventListener('click', handleManualPathInput);
+
+    document.querySelectorAll('.quick-path').forEach(btn => {
+        btn.addEventListener('click', () => handleQuickPath(btn.dataset.path));
+    });
+
+    document.querySelectorAll('.quality-preset[data-quality]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            screenshotQuality = Number(btn.dataset.quality);
+            document.querySelectorAll('.quality-preset[data-quality]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+
+    $('captureScreenshotButton').addEventListener('click', takeScreenshot);
+
     $('startStreamButton').addEventListener('click', startLiveStream);
     $('stopStreamButton').addEventListener('click', stopLiveStream);
     document.body.addEventListener('dragover', event => event.preventDefault());
@@ -1451,17 +1614,40 @@ function wireUi() {
     $('fullStreamButton').addEventListener('click', openLiveFullscreen);
     $('controlLockButton').addEventListener('click', toggleControlLock);
     $('pauseStreamButton').addEventListener('click', toggleStreamPause);
-    $('reconnectStreamButton').addEventListener('click', reconnectStream);
-    $('streamQuality').addEventListener('input', () => adjustLiveStream('quality', Number($('streamQuality').value) || 70));
-    $('streamFps').addEventListener('change', () => adjustLiveStream('fps', Number($('streamFps').value) || 15));
-    $('streamResolution').addEventListener('change', () => adjustLiveStream('resolution', Number($('streamResolution').value) || 0.7));
-    $('streamMonitor').addEventListener('change', () => adjustLiveStream('monitor', Number($('streamMonitor').value) || 0));
-    $('copyRemoteClipboardButton').addEventListener('click', () => sendCommand('get_clipboard'));
-    $('pasteRemoteClipboardButton').addEventListener('click', setRemoteClipboardFromPrompt);
-    $('launchProgramButton').addEventListener('click', launchProgram);
-    $('launchProgramInput').addEventListener('keydown', event => {
-        if (event.key === 'Enter') launchProgram();
+
+    document.querySelectorAll('.quality-preset.live-preset').forEach(btn => {
+        btn.addEventListener('click', () => setStreamQualityPreset(btn.dataset.preset));
     });
+
+    $('audioEnabledCheckbox').addEventListener('change', event => {
+        audioEnabled = event.target.checked;
+        if (!audioEnabled && audioContext) {
+            audioContext.close();
+            audioContext = null;
+        }
+        toast(audioEnabled ? 'Audio enabled' : 'Audio disabled', 'info');
+    });
+
+    $('advancedSettingsToggle').addEventListener('click', () => {
+        const panel = $('liveAdvancedSettings');
+        const isHidden = panel.hidden;
+        panel.hidden = !isHidden;
+        $('advancedSettingsToggle').textContent = isHidden ? 'Hide Settings' : 'Advanced Settings';
+    });
+
+    $('streamQuality').addEventListener('input', () => {
+        if (isStreaming) adjustLiveStream('quality', Number($('streamQuality').value) || 35);
+    });
+    $('streamFps').addEventListener('change', () => {
+        if (isStreaming) adjustLiveStream('fps', Number($('streamFps').value) || 8);
+    });
+    $('streamResolution').addEventListener('change', () => {
+        if (isStreaming) adjustLiveStream('resolution', Number($('streamResolution').value) || 0.5);
+    });
+    $('streamMonitor').addEventListener('change', () => {
+        if (isStreaming) adjustLiveStream('monitor', Number($('streamMonitor').value) || 0);
+    });
+
     $('mobileKeyboardButton').addEventListener('click', showMobileKeyboard);
     $('runCommandButton').addEventListener('click', () => runCommand());
     $('clearTerminalButton').addEventListener('click', () => {
