@@ -347,7 +347,7 @@ function renderPCList() {
     $('totalCount').textContent = Object.keys(clients).length;
 
     if (ids.length === 0) {
-        $('pcList').innerHTML = '<div class="drop-target">No matching devices.</div>';
+        $('pcList').innerHTML = '<div class="drop-target"><strong>No devices connected</strong><br>Run the File Bridge client on remote devices to connect them to this server.<br><br><span style="color:var(--muted)">Connection: ws://[server-address]/ws</span></div>';
         return;
     }
 
