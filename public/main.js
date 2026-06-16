@@ -24,6 +24,7 @@ let commandSentAt = {};
 let audioContext = null;
 let terminalHistory = [];
 let terminalHistoryIndex = 0;
+let screenshots = [];
 let recentPaths = JSON.parse(localStorage.getItem('fb_recent_paths') || '[]').slice(0, 10);
 let screenshotQuality = 30;
 let audioEnabled = false;
@@ -62,11 +63,6 @@ function $(id) {
 }
 
 function toast(message, type = 'info') {
-    const element = document.createElement('div');
-    element.className = 'toast ' + type;
-    element.textContent = message;
-    $('toastContainer').appendChild(element);
-    setTimeout(() => element.remove(), 3500);
     addActivity(message, type);
 }
 
@@ -914,30 +910,109 @@ function takeScreenshot() {
 }
 
 function renderScreenshotEmpty() {
-    if ($('screenshotContainer').innerHTML.trim()) return;
-    $('screenshotContainer').innerHTML = '<div class="empty-card"><div class="empty-icon">IMG</div><h2>Capture the remote screen</h2><p>Take a fresh screenshot from the selected device. Quality presets control file size.</p></div>';
+    if (screenshots.length > 0) return;
+    $('screenshotContainer').innerHTML = '<div class="screenshot-empty"><div class="empty-icon">IMG</div><h2>No screenshots yet</h2><p>Click Capture to take a screenshot from the selected device.</p></div>';
 }
 
 function renderScreenshot(data) {
     if (data.error) {
-        $('screenshotContainer').innerHTML = '<div class="empty-card"><h2>Screenshot failed</h2><p>' + escHtml(data.error) + '</p></div>';
+        toast('Screenshot failed: ' + data.error, 'error');
+        if (screenshots.length === 0) renderScreenshotEmpty();
         return;
     }
-    window._lastScreenshot = data;
-    $('screenshotContainer').innerHTML =
-        '<div><img class="screenshot-img" src="data:image/' + escAttr(data.format || 'png') + ';base64,' + data.screenshot + '" alt="Remote screenshot">' +
-        '<div class="screenshot-actions"><button class="tool-button" type="button" id="refreshScreenshotButton">Refresh</button><button class="primary-button" type="button" id="saveScreenshotButton">Save</button></div></div>';
-    $('refreshScreenshotButton').addEventListener('click', takeScreenshot);
-    $('saveScreenshotButton').addEventListener('click', downloadScreenshot);
-    toast('Screenshot captured', 'success');
+    const entry = {
+        src: 'data:image/' + (data.format || 'png') + ';base64,' + data.screenshot,
+        format: data.format || 'png',
+        time: new Date().toLocaleTimeString(),
+        ts: Date.now()
+    };
+    screenshots.unshift(entry);
+    renderScreenshotGallery();
+}
+
+function renderScreenshotGallery() {
+    const container = $('screenshotContainer');
+    if (screenshots.length === 0) {
+        renderScreenshotEmpty();
+        return;
+    }
+    const html = '<div class="screenshot-gallery">' +
+        screenshots.map((shot, index) =>
+            '<div class="screenshot-thumb" data-index="' + index + '">' +
+            '<img src="' + escAttr(shot.src) + '" alt="Screenshot ' + escAttr(shot.time) + '">' +
+            '<div class="screenshot-thumb-footer">' +
+            '<span class="screenshot-thumb-time">' + escHtml(shot.time) + '</span>' +
+            '<button class="screenshot-thumb-save" data-index="' + index + '" type="button">Save</button>' +
+            '</div></div>'
+        ).join('') +
+    '</div>';
+    container.innerHTML = html;
+
+    container.querySelectorAll('.screenshot-thumb img').forEach(img => {
+        img.parentElement.addEventListener('click', event => {
+            if (event.target.classList.contains('screenshot-thumb-save')) return;
+            const index = Number(img.parentElement.dataset.index);
+            openScreenshotZoom(index);
+        });
+    });
+
+    container.querySelectorAll('.screenshot-thumb-save').forEach(btn => {
+        btn.addEventListener('click', event => {
+            event.stopPropagation();
+            const shot = screenshots[Number(btn.dataset.index)];
+            if (!shot) return;
+            const link = document.createElement('a');
+            link.href = shot.src;
+            link.download = 'screenshot_' + shot.ts + '.' + shot.format;
+            link.click();
+        });
+    });
+}
+
+function openScreenshotZoom(index) {
+    const shot = screenshots[index];
+    if (!shot) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'screenshot-zoom-overlay';
+
+    const img = document.createElement('img');
+    img.src = shot.src;
+    img.alt = 'Screenshot ' + shot.time;
+    img.addEventListener('click', event => event.stopPropagation());
+
+    const close = document.createElement('button');
+    close.className = 'screenshot-zoom-close';
+    close.textContent = '×';
+    close.title = 'Close';
+
+    overlay.appendChild(img);
+    overlay.appendChild(close);
+    document.body.appendChild(overlay);
+
+    const dismiss = () => overlay.remove();
+    overlay.addEventListener('click', dismiss);
+    close.addEventListener('click', dismiss);
+
+    const onKey = event => {
+        if (event.key === 'Escape') { dismiss(); document.removeEventListener('keydown', onKey); }
+        if (event.key === 'ArrowLeft' && index > 0) { dismiss(); document.removeEventListener('keydown', onKey); openScreenshotZoom(index - 1); }
+        if (event.key === 'ArrowRight' && index < screenshots.length - 1) { dismiss(); document.removeEventListener('keydown', onKey); openScreenshotZoom(index + 1); }
+    };
+    document.addEventListener('keydown', onKey);
+}
+
+function clearScreenshots() {
+    screenshots = [];
+    renderScreenshotEmpty();
 }
 
 function downloadScreenshot() {
-    if (!window._lastScreenshot) return;
-    const data = window._lastScreenshot;
+    if (screenshots.length === 0) return;
+    const shot = screenshots[0];
     const link = document.createElement('a');
-    link.href = 'data:image/' + (data.format || 'png') + ';base64,' + data.screenshot;
-    link.download = 'screenshot_' + Date.now() + '.' + (data.format || 'png');
+    link.href = shot.src;
+    link.download = 'screenshot_' + shot.ts + '.' + shot.format;
     link.click();
 }
 
@@ -1599,6 +1674,7 @@ function wireUi() {
     });
 
     $('captureScreenshotButton').addEventListener('click', takeScreenshot);
+    $('clearScreenshotsButton').addEventListener('click', clearScreenshots);
 
     $('startStreamButton').addEventListener('click', startLiveStream);
     $('stopStreamButton').addEventListener('click', stopLiveStream);
