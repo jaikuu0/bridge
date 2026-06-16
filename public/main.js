@@ -422,8 +422,9 @@ function updateManualPathInput() {
 
 function handleManualPathInput() {
     const input = $('manualPathInput');
-    const pathValue = (input.value || '').trim();
-    if (pathValue) {
+    const raw = (input.value || '').trim();
+    if (raw) {
+        const pathValue = expandEnvPath(raw);
         loadFiles(pathValue);
         addToRecentPaths(pathValue);
     }
@@ -434,6 +435,19 @@ function addToRecentPaths(pathValue) {
     recentPaths.unshift(pathValue);
     recentPaths = recentPaths.slice(0, 10);
     localStorage.setItem('fb_recent_paths', JSON.stringify(recentPaths));
+}
+
+function expandEnvPath(pathValue) {
+    const client = clients[selectedPC];
+    const info = client?.systemInfo || {};
+    const username = info.username || '';
+    const homedir = info.homedir || info.home || (username ? 'C:\\Users\\' + username : '');
+
+    return pathValue
+        .replace(/%USERPROFILE%/gi, homedir || '%USERPROFILE%')
+        .replace(/%HOMEDRIVE%%HOMEPATH%/gi, homedir || '%HOMEDRIVE%%HOMEPATH%')
+        .replace(/%USERNAME%/gi, username || '%USERNAME%')
+        .replace(/^~/, homedir || '~');
 }
 
 function handleQuickPath(pathType) {
@@ -453,7 +467,8 @@ function handleQuickPath(pathType) {
     const pathList = paths[pathType];
 
     if (pathList && pathList.length > 0) {
-        loadFiles(pathList[0]);
+        const resolved = expandEnvPath(pathList[0]);
+        loadFiles(resolved);
     }
 }
 
@@ -534,17 +549,21 @@ function renderFileItems(items, driveMode = false) {
 
     list.querySelectorAll('.file-item').forEach(row => {
         const checkbox = row.querySelector('.file-item-checkbox');
+        const menuBtn = row.querySelector('.file-menu-btn');
+
         row.addEventListener('click', event => {
             event.stopPropagation();
             if (event.target === checkbox || event.target.closest('.file-item-checkbox')) {
                 toggleFileSelect(row.dataset.path);
                 updateBulkActions();
-            } else if (!event.target.closest('.file-actions')) {
+            } else if (!event.target.closest('.file-menu-btn')) {
                 openFileRow(row);
             }
         });
-        row.addEventListener('dblclick', () => {
-            if (!event.target.closest('.file-item-checkbox')) openFileRow(row);
+
+        menuBtn.addEventListener('click', event => {
+            event.stopPropagation();
+            openFileContextMenu(menuBtn, row);
         });
     });
 
@@ -579,19 +598,22 @@ function updateBulkActions() {
 }
 
 function getFileEmoji(item) {
-    if (item.is_dir) return 'D';
-    const extension = getExtension(item.name || item.path || '').toLowerCase();
+    if (item.is_dir) return '📁';
+    const ext = getExtension(item.name || item.path || '').toLowerCase();
     const map = {
-        'txt': 'T', 'md': 'M', 'log': 'L', 'json': '{', 'csv': '#',
-        'js': 'JS', 'ts': 'TS', 'py': 'PY', 'html': 'H', 'css': 'C',
-        'png': 'IMG', 'jpg': 'IMG', 'jpeg': 'IMG', 'gif': 'IMG', 'bmp': 'IMG', 'svg': 'IMG', 'webp': 'IMG',
-        'mp3': 'MP3', 'wav': 'WAV', 'flac': 'FLC',
-        'mp4': 'MP4', 'mov': 'MOV', 'mkv': 'MKV',
-        'zip': 'ZIP', 'rar': 'RAR', '7z': '7Z', 'gz': 'GZ',
-        'exe': 'EXE', 'msi': 'MSI', 'bat': 'BAT', 'cmd': 'CMD',
-        'pdf': 'PDF', 'doc': 'DOC', 'docx': 'DOC', 'ppt': 'PPT', 'pptx': 'PPT', 'xls': 'XLS', 'xlsx': 'XLS',
+        'txt': '📄', 'md': '📝', 'log': '📋', 'json': '📋', 'csv': '📊', 'ini': '📋', 'conf': '📋',
+        'js': '⚙️', 'ts': '⚙️', 'py': '🐍', 'html': '🌐', 'css': '🎨', 'xml': '📋', 'yml': '📋', 'yaml': '📋',
+        'png': '🖼️', 'jpg': '🖼️', 'jpeg': '🖼️', 'gif': '🖼️', 'bmp': '🖼️', 'svg': '🖼️', 'webp': '🖼️',
+        'mp3': '🎵', 'wav': '🎵', 'flac': '🎵', 'ogg': '🎵',
+        'mp4': '🎬', 'mov': '🎬', 'mkv': '🎬', 'avi': '🎬', 'wmv': '🎬',
+        'zip': '📦', 'rar': '📦', '7z': '📦', 'gz': '📦', 'tar': '📦',
+        'exe': '⚡', 'msi': '⚡', 'bat': '⚡', 'cmd': '⚡', 'sh': '⚡',
+        'pdf': '📕', 'doc': '📘', 'docx': '📘', 'ppt': '📙', 'pptx': '📙', 'xls': '📗', 'xlsx': '📗',
+        'sql': '🗄️', 'db': '🗄️', 'sqlite': '🗄️',
+        'psd': '🖌️', 'ai': '🖌️', 'fig': '🖌️',
+        'apk': '📱', 'iso': '💿',
     };
-    return map[extension] || 'F';
+    return map[ext] || '📄';
 }
 
 function fileRowHtml(item, driveMode) {
@@ -599,15 +621,10 @@ function fileRowHtml(item, driveMode) {
     const extension = getExtension(name);
     const kind = item.is_dir ? 'Folder' : extension.toUpperCase() || 'File';
     const isSelected = selectedFiles.has(item.path);
-    return '<div class="file-item' + (isSelected ? ' selected' : '') + '" data-path="' + escAttr(item.path || name) + '" data-name="' + escAttr(name) + '" data-ext="' + escAttr(extension) + '" data-dir="' + (item.is_dir ? '1' : '0') + '">' +
+    return '<div class="file-item' + (isSelected ? ' selected' : '') + '" data-path="' + escAttr(item.path || name) + '" data-name="' + escAttr(name) + '" data-ext="' + escAttr(extension) + '" data-dir="' + (item.is_dir ? '1' : '0') + '" data-drive="' + (driveMode ? '1' : '0') + '">' +
         '<div class="file-item-checkbox"></div>' +
-        '<div class="file-main"><span class="file-icon">' + escHtml(getFileEmoji(item)) + '</span><span class="file-text"><span class="file-name">' + escHtml(name) + '</span><span class="file-sub">' + escHtml(kind) + '</span></span></div>' +
-        '<div class="file-actions">' +
-            '<button class="mini-button" data-action="' + (item.is_dir || driveMode ? 'open' : 'open-file') + '">' + (item.is_dir || driveMode ? 'Open' : 'Preview') + '</button>' +
-            (item.is_dir || driveMode ? '' : '<button class="mini-button" data-action="download">Download</button>') +
-            (item.is_dir || driveMode ? '' : '<button class="mini-button" data-action="rename">Rename</button>') +
-            (driveMode ? '' : '<button class="mini-button danger" data-action="delete">Delete</button>') +
-        '</div>' +
+        '<div class="file-main"><span class="file-icon emoji-icon">' + getFileEmoji(item) + '</span><span class="file-text"><span class="file-name">' + escHtml(name) + '</span><span class="file-sub">' + escHtml(kind) + '</span></span></div>' +
+        '<button class="file-menu-btn" type="button" title="More options" tabindex="-1">&#8943;</button>' +
     '</div>';
 }
 
@@ -635,6 +652,66 @@ function runFileAction(action, row) {
     if (action === 'download') downloadFile(pathValue, name);
     if (action === 'rename') showRenameModal(pathValue, name);
     if (action === 'delete') deleteFile(pathValue);
+}
+
+function openFileContextMenu(trigger, row) {
+    closeFileContextMenu();
+
+    const isDir = row.dataset.dir === '1';
+    const isDrive = row.dataset.drive === '1';
+
+    const actions = [];
+    if (isDir || isDrive) {
+        actions.push({ label: 'Open', action: isDir ? 'open' : 'open' });
+    } else {
+        actions.push({ label: 'Preview', action: 'open-file' });
+        actions.push({ label: 'Download', action: 'download' });
+        actions.push({ label: 'Rename', action: 'rename' });
+    }
+    if (!isDrive) {
+        actions.push({ label: 'Delete', action: 'delete', danger: true });
+    }
+
+    const menu = document.createElement('div');
+    menu.id = 'fileContextMenu';
+    menu.className = 'file-context-menu';
+    menu.innerHTML = actions.map(a =>
+        '<button class="file-ctx-item' + (a.danger ? ' danger' : '') + '" data-action="' + escAttr(a.action) + '" type="button">' + escHtml(a.label) + '</button>'
+    ).join('');
+
+    menu.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', event => {
+            event.stopPropagation();
+            closeFileContextMenu();
+            runFileAction(btn.dataset.action, row);
+        });
+    });
+
+    document.body.appendChild(menu);
+
+    const rect = trigger.getBoundingClientRect();
+    const menuW = 140;
+    let left = rect.right - menuW;
+    let top = rect.bottom + 4;
+    if (left < 8) left = 8;
+    if (top + 160 > window.innerHeight) top = rect.top - 4 - (actions.length * 38);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+
+    requestAnimationFrame(() => {
+        document.addEventListener('click', closeFileContextMenu, { once: true });
+        document.addEventListener('keydown', onContextMenuKey);
+    });
+}
+
+function onContextMenuKey(event) {
+    if (event.key === 'Escape') closeFileContextMenu();
+}
+
+function closeFileContextMenu() {
+    const menu = document.getElementById('fileContextMenu');
+    if (menu) menu.remove();
+    document.removeEventListener('keydown', onContextMenuKey);
 }
 
 function renderPathBar(pathValue) {
@@ -1614,6 +1691,14 @@ function wireUi() {
         if (event.key === 'Enter') doLogin();
     });
     $('logoutButton').addEventListener('click', doLogout);
+    $('topbarMenuToggle').addEventListener('click', () => {
+        $('topbarActions').classList.toggle('open');
+    });
+    document.addEventListener('click', event => {
+        if (!event.target.closest('.topbar-actions') && !event.target.closest('#topbarMenuToggle')) {
+            $('topbarActions').classList.remove('open');
+        }
+    });
     $('refreshClientsButton').addEventListener('click', fetchClients);
     $('pcSearch').addEventListener('input', renderPCList);
     $('quickPingButton').addEventListener('click', () => sendCommand('ping'));
