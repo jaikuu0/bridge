@@ -27,7 +27,7 @@
     </div>
   </section>
 
-  <main id="app" class="app-shell" aria-label="File Bridge dashboard">
+  <main id="app" class="app-shell sidebar-closed" aria-label="File Bridge dashboard">
     <aside class="sidebar">
       <div class="sidebar-head">
         <div class="brand-lockup">
@@ -37,6 +37,9 @@
             <span id="connectionStatus">Connecting...</span>
           </div>
         </div>
+        <button class="sidebar-close-toggle" id="sidebarCloseToggle" type="button" aria-label="Close devices" title="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
         <button class="icon-button" id="refreshClientsButton" type="button" title="Refresh devices">Refresh</button>
       </div>
 
@@ -55,15 +58,46 @@
         </div>
       </div>
 
-      <div class="section-title">Devices</div>
+      <div class="mode-bar">
+        <div class="mode-toggle-group">
+          <button class="mode-btn active" id="modeSpyBtn" type="button">
+            <span class="mode-btn-icon">👁</span>Spy
+          </button>
+          <button class="mode-btn" id="modeNormalBtn" type="button">
+            <span class="mode-btn-icon">⚡</span>Normal
+          </button>
+        </div>
+        <div class="bw-limit-row" id="bwLimitRow">
+          <span class="bw-limit-label">Limit</span>
+          <input type="number" id="bwLimitInput" min="10" max="10000" value="50" title="Bandwidth limit (kbps)">
+          <span class="bw-unit">kbps</span>
+        </div>
+      </div>
+
+      <div class="bw-meter" id="bwMeter">
+        <div class="bw-meter-track">
+          <div class="bw-meter-bar" id="bwMeterBar"></div>
+        </div>
+        <span class="bw-meter-label" id="bwMeterLabel">0 / 50 kbps</span>
+      </div>
+
+      <div class="section-title">
+        Devices
+        <span class="mode-label spy" id="modeLabel">SPY</span>
+      </div>
       <div id="pcList" class="pc-list"></div>
     </aside>
 
     <section class="workspace">
       <header class="topbar">
-        <div>
-          <div class="eyebrow">Remote control center</div>
-          <h2 id="workspaceTitle">Select a device</h2>
+        <div style="display:flex;align-items:center;gap:14px;min-width:0;">
+          <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Open devices" title="Devices">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+          </button>
+          <div>
+            <div class="eyebrow">Remote control center</div>
+            <h2 id="workspaceTitle">Select a device</h2>
+          </div>
         </div>
         <button class="topbar-menu-toggle" id="topbarMenuToggle" type="button" aria-label="Menu">&#9776;</button>
         <div class="topbar-actions" id="topbarActions">
